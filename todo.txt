@@ -1,0 +1,11 @@
+Bother ToDos
+
+- Have a specific postion goal
+- Search breadth first for the move that leads to the shortest path:
+  - to that position
+  - in the closest direction
+
+- Search starts with last move, then turn right, then turn left, then
+backwards
+
+
