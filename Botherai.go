@@ -3,10 +3,15 @@ package main
 import (
 	"fmt"
 	"math"
+	"math/rand"
 	"os"
 	"os/exec"
 	"time"
 )
+
+func init() {
+	rand.Seed(time.Now().UTC().UnixNano())
+}
 
 type Arena [arenaWidth][arenaHeight]byte
 
@@ -29,6 +34,13 @@ func (c Coordinate) add(c2 Coordinate) Coordinate {
 	c.x += c2.x
 	c.y += c2.y
 	return c
+}
+
+func (c Coordinate) equals(c2 Coordinate) bool {
+	if c.x == c2.x && c.y == c2.y {
+		return true
+	}
+	return false
 }
 
 type Vector struct {
@@ -118,12 +130,12 @@ func (u Unit) toVector() Vector {
 }
 
 type Bother struct {
-	pos          Coordinate
-	sensoryRange int
-	goal         Coordinate
-	wPlayer      float64
-	wBother      float64
-	wGoal        float64
+	pos     Coordinate
+	gsr     int // goal scan range
+	goal    Coordinate
+	wPlayer float64
+	wBother float64
+	wGoal   float64
 }
 
 func inArena(c Coordinate) bool {
@@ -137,7 +149,7 @@ func main() {
 	fmt.Println("Bother AI")
 	var b Bother
 	b.pos = Coordinate{50, 50}
-	b.sensoryRange = 20
+	b.gsr = 20
 	b.wPlayer = 30 // these numbers define how far away the attraction falls to half
 	b.wBother = 5
 	b.goal = Coordinate{70, 50}
@@ -151,23 +163,28 @@ func main() {
 	//arena[47][33] = BotherType
 	//arena[52][53] = BotherType
 
+	generateBlocks(&arena)
+
 	// build the wall
-	for y := 30; y < 70; y++ {
-		arena[60][y] = BlockType
+	if false {
+		for y := 30; y < 70; y++ {
+			arena[60][y] = BlockType
+		}
+		for x := 60; x < 63; x++ {
+			arena[x][49] = BlockType
+			arena[x][51] = BlockType
+		}
+		arena[60][50] = SpaceType
+		arena[62][50] = BlockType
+		arena[60][52] = SpaceType
 	}
-	for x := 60; x < 63; x++ {
-		arena[x][49] = BlockType
-		arena[x][51] = BlockType
-	}
-	arena[60][50] = SpaceType
-	arena[62][50] = BlockType
-	arena[60][52] = SpaceType
 
 	for {
 
 		dir := b.botherAI(&arena)
 		fmt.Println("move=", dir)
 
+		return
 		//break
 
 		newPos := b.pos.add(Coordinate{int(dir.x()), int(dir.y())})
@@ -187,6 +204,20 @@ func main() {
 
 }
 
+func generateBlocks(arena *Arena) {
+	nrBlocks := int((arenaWidth * arenaHeight) * 0.4)
+	for b := 0; b < nrBlocks; b++ {
+	Retry:
+		for {
+			x, y := rand.Intn(arenaWidth), rand.Intn(arenaHeight)
+			if arena[x][y] == SpaceType {
+				arena[x][y] = BlockType
+				break Retry
+			}
+		}
+	}
+}
+
 func clear() {
 	cmd := exec.Command("clear") // for Linux
 	/* cmd := exec.Command("cls") // for Windows */
@@ -196,10 +227,10 @@ func clear() {
 
 func (b *Bother) printSensoryRange(arena *Arena) {
 	//clear()
-	fmt.Println("sensory range", b.sensoryRange)
-	for y := b.pos.y - b.sensoryRange; y < b.pos.y+b.sensoryRange; y++ {
+	fmt.Println("sensory range", b.gsr)
+	for y := b.pos.y - b.gsr; y < b.pos.y+b.gsr; y++ {
 		var line string
-		for x := b.pos.x - b.sensoryRange; x < b.pos.x+b.sensoryRange; x++ {
+		for x := b.pos.x - b.gsr; x < b.pos.x+b.gsr; x++ {
 			if inArena(Coordinate{x, y}) {
 				switch arena[x][y] {
 				case SpaceType:
@@ -229,9 +260,9 @@ func (b *Bother) printSensoryRange(arena *Arena) {
 
 // botherAI returns its desired vector movement
 func (b *Bother) botherAI(arena *Arena) Direction {
-	angle := b.findBestGoal(arena)
-	dir := b.findBestMove(angle, 3, arena)
-	return dir
+	//angle := b.findBestGoal(arena)
+	findBestMove(*b, arena)
+	return North
 }
 
 /*****************************************************************************
@@ -240,8 +271,8 @@ func (b *Bother) findBestGoal(arena *Arena) Angle {
 	// find unit vectors to players, bothers
 	var bothers []Unit
 	var players []Unit
-	for x := b.pos.x - b.sensoryRange; x < b.pos.x+b.sensoryRange; x++ {
-		for y := b.pos.y - b.sensoryRange; y < b.pos.y+b.sensoryRange; y++ {
+	for x := b.pos.x - b.gsr; x < b.pos.x+b.gsr; x++ {
+		for y := b.pos.y - b.gsr; y < b.pos.y+b.gsr; y++ {
 			if inArena(Coordinate{x, y}) {
 				switch {
 				case arena[x][y] == BotherType:
@@ -433,66 +464,15 @@ func (a1 Angle) Deviation(a2 Angle) Angle {
 }
 
 /*****************************************************************************
-* Path
- */
-type Path struct {
-	move      Direction // the initial move direction to follow this path (N,E,S,W)
-	origin    Coordinate
-	deviation Angle // deviation from the desired angle
-	desired   Angle
-}
-
-func (path Path) check(turn Turn, level int, dir Direction, pos Coordinate, move Direction, arena *Arena) Path {
-	//fmt.Println(">>>checking", turn, "level=", level, "moving", dir, "to", pos)
-	if arena[pos.x][pos.y] == BlockType {
-		// this coordinate cannot be traversed
-		//fmt.Println("blocked")
-		return path
-	}
-
-	// check if this is a better path
-	angle := path.origin.makeVector(pos).angle()
-	deviation := path.desired.Deviation(angle)
-	//fmt.Println("angle", angle, "deviation", deviation)
-	if deviation < path.deviation {
-		//fmt.Println("this one is better")
-		path.deviation = deviation
-		path.move = move
-	}
-
-	// should we traverse further along this path?
-	if level > 0 {
-		// check if further paths are even better
-		//fmt.Println("checking Straight")
-		path = path.check(Straight, level-1, dir, dir.add(pos), move, arena)
-		if turn != Right {
-			//fmt.Println("checking Right")
-			path = path.check(Right, level-1, dir.turnRight(), dir.turnRight().add(pos), move, arena)
-		}
-		if turn != Left {
-			//fmt.Println("checking Left")
-			path = path.check(Left, level-1, dir.turnLeft(), dir.turnLeft().add(pos), move, arena)
-		}
-	}
-	return path
-}
-
-func (b *Bother) findBestMove(a Angle, levels int, arena *Arena) Direction {
-	var path Path
-	path.deviation = math.Pi // any deviations have to be better than this
-	path.move = NoMove
-	path.origin = b.pos
-	path.desired = a
-	for _, dir := range []Direction{North, East, South, West} {
-		//fmt.Println("Checking paths to the", dir)
-		path = path.check(Straight, levels, dir, dir.add(b.pos), dir, arena)
-	}
-	return path.move
-}
-
-/*****************************************************************************
 * Cell reachability
  */
+func within(i, min, max int) bool {
+	if i >= min && i <= max {
+		return true
+	}
+	return false
+}
+
 type Cell struct {
 	defined bool
 	move    Direction // the bother move that could lead to this cell
@@ -503,76 +483,174 @@ type Field struct {
 	center     Coordinate
 	upperLeft  Coordinate
 	lowerRight Coordinate
-	sr         int // sensory range
+	size       int
+	psr        int // path scan range
 	cells      [][]Cell
 }
 
-func within(i, min, max int) bool {
-	if i >= min && i <= max {
-		return true
+func (f *Field) setParameters(center Coordinate, psr int) {
+	f.center = center
+	f.psr = psr
+	f.upperLeft.x, f.upperLeft.y = center.x-psr, center.y-psr
+	fmt.Println("ul", f.upperLeft)
+	f.lowerRight.x, f.lowerRight.y = center.x+psr, center.y+psr
+	fmt.Println("lr", f.lowerRight)
+	f.size = (psr * 2) + 1
+	f.cells = make([][]Cell, f.size)
+	for i := 0; i < f.size; i++ {
+		f.cells[i] = make([]Cell, f.size)
 	}
-	return false
+	f.cellAt(f.center).defined = true
+	f.cellAt(f.center).move = NoMove
 }
 
-func (f field) getCell(pos Coordinate) (*Cell, bool) {
+func (f *Field) setBlockages(arena *Arena) {
+	for x := f.center.x - f.psr; x <= f.center.x+f.psr; x++ {
+		for y := f.center.y - f.psr; x <= f.center.y+f.psr; y++ {
+			xy := Coordinate{x, y}
+			if inArena(xy) {
+				switch arena[x][y] {
+				case BlockType, EdgeType:
+					f.cellAt(xy).defined = true
+					f.cellAt(xy).move = NoMove
+				}
+			} else {
+				// field extends outside of arena
+				f.cellAt(xy).defined = true
+				f.cellAt(xy).move = NoMove
+			}
+		}
+	}
+}
+
+func (f Field) cellAt(pos Coordinate) *Cell {
 	// is the coordinate within the field?
 	if !within(pos.x, f.upperLeft.x, f.lowerRight.x) {
-		return nil, false
+		return nil
 	}
 	if !within(pos.y, f.upperLeft.y, f.lowerRight.y) {
-		return nil, false
+		return nil
 	}
-	return &cells[pos.x-f.upperLeft.x][pos.y-f.upperLeft.y]
+	return &f.cells[pos.x-f.upperLeft.x][pos.y-f.upperLeft.y]
 }
 
-func (c Cell) atDir(dir Direction) Cell {
-
-}
-
-func (c *Cell) compare(pos Coordinate) {
-	c2 := field.cellAt(pos)
-	if c2.defined && (c2.move != NoMove) && (c2.moves+1 < c.moves) {
-		c.defined = true
-		c.move = c2.move
-		c.moves = c2.moves + 1
+func (f Field) compareCells(cell1, cell2 Coordinate) bool {
+	c1 := f.cellAt(cell1)
+	c2 := f.cellAt(cell2)
+	if c1 != nil && c2 != nil {
+		if c2.defined && (c2.move != NoMove) {
+			if !c1.defined || (c2.moves+1 < c1.moves) {
+				c1.defined = true
+				c1.move = c2.move
+				c1.moves = c2.moves + 1
+				return true
+			}
+		}
 	}
+	return false
 }
 
 // The setCell function sets the cell's move and moves according to its
 // neighbors.
 // If cell is set to NoMove, it is not reachable (could be a BlockType)
-func (c *Cell) setCell() {
-	if !c.defined {
-		nrBlocked := 0
-		for _, dir := range checkOrder {
-			c.compare(dir.add(c.pos)) // dir.offset()??
+func (f Field) setCell(pos Coordinate) int {
+	updated := false
+	for _, dir := range []Direction{North, East, South, West} {
+		//fmt.Println(pos, dir)
+		if u := f.compareCells(pos, dir.add(pos)); u == true {
+			updated = true
+		}
+	}
+	if updated {
+		return 1
+	} else {
+		return 0
+	}
+}
+
+// ┌┐└┘│─├┤┬┼┴
+// ┌──┬──┐
+// │--│N2│
+// ├──┼──┤
+// │XX│N1│
+// └──┴──┘
+func (f Field) print() {
+	// print header
+	fmt.Print("┌")
+	for x := 0; x < f.size-1; x++ {
+		fmt.Print("───┬")
+	}
+	fmt.Println("───┐")
+	// print field
+	for y := 0; y < f.size; y++ {
+		for x := 0; x < f.size; x++ {
+			fmt.Print("│")
+			c := f.cellAt(f.upperLeft.add(Coordinate{x, y}))
+			if c == nil {
+				fmt.Print(" ? ")
+			} else if !c.defined {
+				fmt.Print(" - ")
+			} else if f.upperLeft.add(Coordinate{x, y}).equals(f.center) {
+				fmt.Print(" X ")
+			} else if c.move == NoMove {
+				fmt.Print("███")
+			} else {
+				fmt.Print(c.move.String()[0:1])
+				fmt.Printf("%-2d", c.moves)
+			}
+		}
+		fmt.Println("│")
+		if y < f.size-1 {
+			// print separator
+			fmt.Print("├")
+			for x := 0; x < f.size-1; x++ {
+				fmt.Print("───┼")
+			}
+			fmt.Println("───┤")
+		} else {
+			// print footer
+			fmt.Print("└")
+			for x := 0; x < f.size-1; x++ {
+				fmt.Print("───┴")
+			}
+			fmt.Println("───┘")
 		}
 	}
 }
 
-func check(b Bother) {
-	i := sensoryRange
-	var field Field
+func findBestMove(b Bother, arena *Arena) {
+	var f Field
+
+	fmt.Println("set parameters")
+	f.setParameters(b.pos, 10)
+
+	f.print()
+	time.Sleep(time.Second * 1)
 
 	// Prepopulate cells with blocks from arena
-	for x := b.pos.x - i; x <= b.pos.x+i; x++ {
-		for y := b.pos.y - i; x <= b.pos.y+i; y++ {
-			xy := Coordinate{x, y}
-			switch field.getArena(xy) {
-			case BlockType, EdgeType:
-				field.cellAt(xy).defined = true
-				field.cellAt(xy).move = NoMove
+
+	fmt.Println("set blocks")
+	for x := f.upperLeft.x; x <= f.lowerRight.x; x++ {
+		for y := f.upperLeft.y; y <= f.lowerRight.y; y++ {
+			if inArena(Coordinate{x, y}) {
+				switch arena[x][y] {
+				case EdgeType, BlockType:
+					c := f.cellAt(Coordinate{x, y})
+					if c != nil {
+						c.defined = true
+						c.move = NoMove
+					}
+				}
 			}
 		}
 	}
 
-	// the bother position
-	field.cellAt(b.pos).defined = true
-	field.cellAt(b.pos).move = NoMove
+	f.print()
+	time.Sleep(time.Second * 1)
 
 	// seed first moves, if not already defined as blocks
 	for _, dir := range []Direction{North, East, South, West} {
-		c := field.cellAt(dir.add(b.pos))
+		c := f.cellAt(dir.add(b.pos))
 		if !c.defined {
 			c.defined = true
 			c.move = dir
@@ -580,24 +658,28 @@ func check(b Bother) {
 		}
 	}
 
+	f.print()
+	time.Sleep(time.Second * 1)
+
 	// propogate moves into the rest of the cells
-	unchecked := 1
-	for unchecked > 0 {
-		unchecked = 0
-		for x := b.pos.x - i; x <= b.pos.x+i; x++ {
-			for y := b.pos.y - i; x <= b.pos.y+i; y++ {
-				c := field.cellAt(dir.add(b.pos))
-				unchecked += field.cellAt(Coordinate{x, y}).setCell()
+	updated := 1
+	for updated > 0 {
+		updated = 0
+		for x := f.upperLeft.x; x <= f.lowerRight.x; x++ {
+			for y := f.upperLeft.y; y <= f.lowerRight.y; y++ {
+				updated += f.setCell(Coordinate{x, y})
 			}
 		}
+		f.print()
+		time.Sleep(time.Second * 1)
 	}
 }
 
 func (f Field) getMove(goal Coordinate) Direction {
 	// Check if trapped
 	count := 0
-	for dir := range []Direction{North, East, South, West} {
-		if dir.add(f.center) == NoMove {
+	for _, dir := range []Direction{North, East, South, West} {
+		if f.cellAt(dir.add(f.center)).move == NoMove {
 			count += 1
 		}
 	}
@@ -605,7 +687,7 @@ func (f Field) getMove(goal Coordinate) Direction {
 		return NoMove
 	}
 	// Check if goal is in field and has a move
-	if cell, ok := g.getCell(goal); ok && cell.move != NoMove {
+	if cell := f.cellAt(goal); cell != nil && cell.move != NoMove {
 		return cell.move
 	}
 	// Return best direction along vector
@@ -620,29 +702,30 @@ func (f Field) getMove(goal Coordinate) Direction {
 	// ├─┐ │
 	// ├─┘ │
 	// └───┘
-	u := center.makeVector(goal).toUnit()
-	sqrt2 := math.sqrt(2.0)
+	u := f.center.makeVector(goal).toUnit()
+	sqrt2 := math.Sqrt(2.0)
+	var dxStart, dxEnd, dyStart, dyEnd int
 	switch {
-	case u.x < -sqrt2:
-		dxStart = -sr
+	case u.dx < -sqrt2:
+		dxStart = -f.psr
 		dxEnd = 0
-	case u.x > sqrt2:
+	case u.dx > sqrt2:
 		dxStart = 0
-		dxEnd = sr
+		dxEnd = f.psr
 	default:
-		dxStart = -sr / 2
-		dxEnd = sr / 2
+		dxStart = -f.psr / 2
+		dxEnd = f.psr / 2
 	}
 	switch {
-	case u.y < -sqrt2:
-		dyStart = -sr
+	case u.dy < -sqrt2:
+		dyStart = -f.psr
 		dyEnd = 0
-	case u.y > sqrt2:
+	case u.dy > sqrt2:
 		dyStart = 0
-		dyEnd = sr
+		dyEnd = f.psr
 	default:
-		dyStart = -sr / 2
-		dyEnd = sr / 2
+		dyStart = -f.psr / 2
+		dyEnd = f.psr / 2
 	}
 	// Return best move in the sub-region
 	move := f.bestMoveInRange(dxStart, dyStart, dxEnd, dyEnd)
@@ -650,7 +733,7 @@ func (f Field) getMove(goal Coordinate) Direction {
 		return move
 	}
 	// Return best move in the whole field
-	move := f.bestMoveInRange(-sr, -sr, sr, sr)
+	move = f.bestMoveInRange(-f.psr, -f.psr, f.psr, f.psr)
 	return move
 }
 
@@ -662,7 +745,7 @@ func (f Field) bestMoveInRange(dxStart, dyStart, dxEnd, dyEnd int) Direction {
 	yEnd := f.center.y + dyEnd
 	for x := xStart; x <= xEnd; x++ {
 		for y := yStart; y <= yEnd; y++ {
-			dirCounts[f.getCell(Coordinate{x, y}).move] += 1
+			dirCounts[f.cellAt(Coordinate{x, y}).move] += 1
 		}
 	}
 	var bestMove Direction
