@@ -2,7 +2,7 @@ package main
 
 import (
 	"fmt"
-	"math"
+	//"math"
 	"math/rand"
 	"os"
 	"os/exec"
@@ -44,19 +44,17 @@ func (c Coordinate) equals(c2 Coordinate) bool {
 }
 
 type Vector struct {
-	dx, dy float64
+	dx, dy int
 }
 
-// angles
 //
-//                      θ0.0
 //                    (0,-1)
 //                    North
 //                      ^
 //                      |
 //                  (-y)|
 //                      |
-//  θ4.71       (-x)    |              θ1.57
+//              (-x)    |
 //  (-1,0)West<---------+--------->East(1,0)
 //                      |    (+x)
 //                      |
@@ -65,23 +63,17 @@ type Vector struct {
 //                      V
 //                    South
 //                    (0,1)
-//                    θ3.14
-
-func (v Vector) angle() Angle {
-	return Angle(math.Atan2(-v.dx, v.dy) + math.Pi)
-}
-
 func (start Coordinate) makeVector(end Coordinate) Vector {
 	var v Vector
-	v.dx, v.dy = float64(end.x)-float64(start.x), float64(end.y)-float64(start.y)
+	v.dx, v.dy = end.x-start.x, end.y-start.y
 	return v
 }
 
+/*
 type Unit struct {
 	dx, dy float64
 	mag    float64
 }
-
 // toUnit converts a vector to a unit vector with magnitude.
 func (v Vector) toUnit() Unit {
 	var u Unit
@@ -91,13 +83,14 @@ func (v Vector) toUnit() Unit {
 	}
 	return u
 }
-
+*/
 func (v1 Vector) add(v2 Vector) Vector {
 	var vSum Vector
 	vSum.dx, vSum.dy = v1.dx+v2.dx, v1.dy+v2.dy
 	return vSum
 }
 
+/*
 func (v Vector) normalize() Vector {
 	if math.Abs(v.dx) > math.Abs(v.dy) {
 		// horizontal dominates vertical
@@ -122,16 +115,18 @@ func (v Vector) normalize() Vector {
 	}
 	return v
 }
-
+*/
+/*
 func (u Unit) toVector() Vector {
 	var v Vector
 	v.dx, v.dy = u.dx*u.mag, u.dy*u.mag
 	return v
 }
-
+*/
 type Bother struct {
 	pos     Coordinate
 	gsr     int // goal scan range
+	psr     int // goal scan range
 	goal    Coordinate
 	wPlayer float64
 	wBother float64
@@ -150,15 +145,16 @@ func main() {
 	var b Bother
 	b.pos = Coordinate{50, 50}
 	b.gsr = 20
+	b.psr = 20
 	b.wPlayer = 30 // these numbers define how far away the attraction falls to half
 	b.wBother = 5
-	b.goal = Coordinate{70, 50}
+	//b.goal = Coordinate{70, 50}
 	b.wGoal = .01
 
 	var arena Arena
 	arena[b.pos.x][b.pos.y] = BotherType
-	arena[b.goal.x][b.goal.y] = GoalType
-	arena[63][50] = PlayerType
+	//arena[b.goal.x][b.goal.y] = GoalType
+	arena[65][55] = PlayerType
 	//arena[45][35] = PlayerType
 	//arena[47][33] = BotherType
 	//arena[52][53] = BotherType
@@ -184,9 +180,6 @@ func main() {
 		dir := b.botherAI(&arena)
 		fmt.Println("move=", dir)
 
-		return
-		//break
-
 		newPos := b.pos.add(Coordinate{int(dir.x()), int(dir.y())})
 
 		if !inArena(newPos) {
@@ -205,7 +198,7 @@ func main() {
 }
 
 func generateBlocks(arena *Arena) {
-	nrBlocks := int((arenaWidth * arenaHeight) * 0.4)
+	nrBlocks := int((arenaWidth * arenaHeight) * 0.3)
 	for b := 0; b < nrBlocks; b++ {
 	Retry:
 		for {
@@ -260,75 +253,84 @@ func (b *Bother) printSensoryRange(arena *Arena) {
 
 // botherAI returns its desired vector movement
 func (b *Bother) botherAI(arena *Arena) Direction {
-	//angle := b.findBestGoal(arena)
-	findBestMove(*b, arena)
-	return North
+	goal := b.findBestGoal(arena)
+	f := scanMoveField(*b, arena)
+	dir := b.getBestMove(f, goal)
+	return dir
 }
 
 /*****************************************************************************
  */
-func (b *Bother) findBestGoal(arena *Arena) Angle {
+func (b *Bother) findBestGoal(arena *Arena) Coordinate {
 	// find unit vectors to players, bothers
-	var bothers []Unit
-	var players []Unit
+	var goals []Coordinate
 	for x := b.pos.x - b.gsr; x < b.pos.x+b.gsr; x++ {
 		for y := b.pos.y - b.gsr; y < b.pos.y+b.gsr; y++ {
-			if inArena(Coordinate{x, y}) {
+			xy := Coordinate{x, y}
+			if inArena(xy) {
 				switch {
 				case arena[x][y] == BotherType:
-					fmt.Println("found bother at", x, y, "vector", b.pos.makeVector(Coordinate{x, y}))
+					fmt.Println("found bother at", xy)
 					if x != b.pos.x || y != b.pos.y {
-						bothers = append(bothers, b.pos.makeVector(Coordinate{x, y}).toUnit())
+						goals = append(goals, xy)
 					} else {
 						fmt.Println("it's me!")
 					}
 				case arena[x][y] == PlayerType:
-					fmt.Println("found player at", x, y, "vector", b.pos.makeVector(Coordinate{x, y}))
-					players = append(players, b.pos.makeVector(Coordinate{x, y}).toUnit())
+					fmt.Println("found player at", xy)
+					goals = append(goals, xy)
 				}
 			}
 		}
 	}
+	if len(goals) > 0 {
+		var xySum Coordinate
+		for _, xy := range goals {
+			xySum = xySum.add(xy)
+		}
+		return Coordinate{xySum.x / len(goals), xySum.y / len(goals)}
+	}
+	fmt.Println("no goals!")
+	return b.pos.add(North.toCoords())
 	// goal is not subject to sensory range
-	uGoal := b.pos.makeVector(b.goal).toUnit()
-	fmt.Println("goal at", b.goal, "vector", b.pos.makeVector(b.goal))
+	//uGoal := b.pos.makeVector(b.goal).toUnit()
+	//fmt.Println("goal at", b.goal, "vector", b.pos.makeVector(b.goal))
 
-	// weight vectors
-	for i, bother := range bothers {
-		mag := math.Pow(0.5, bother.mag/b.wBother)
-		//if (b.wBother > 0 && mag < 0) || (b.wBother < 0 && mag > 0) {
-		//	mag = 0
-		//}
-		fmt.Println("bother", i, "is unit vector", bother, "weighted mag", mag)
-		bothers[i].mag = mag
-	}
-	for i, player := range players {
-		mag := math.Pow(0.5, player.mag/b.wPlayer)
-		//if (b.wPlayer > 0 && mag < 0) || (b.wPlayer < 0 && mag > 0) {
-		//	mag = 0
-		//}
-		fmt.Println("player", i, "is unit vector", player, "weighted mag", mag)
-		players[i].mag = mag
-	}
-	mag := math.Pow(0.5, uGoal.mag/b.wGoal)
-	fmt.Println("goal is unit vector", uGoal, "weighted mag", mag)
-	uGoal.mag = mag
+	/*
+		// weight vectors
+		for i, bother := range bothers {
+			mag := math.Pow(0.5, bother.mag/b.wBother)
+			//if (b.wBother > 0 && mag < 0) || (b.wBother < 0 && mag > 0) {
+			//	mag = 0
+			//}
+			fmt.Println("bother", i, "is unit vector", bother, "weighted mag", mag)
+			bothers[i].mag = mag
+		}
+		for i, player := range players {
+			mag := math.Pow(0.5, player.mag/b.wPlayer)
+			//if (b.wPlayer > 0 && mag < 0) || (b.wPlayer < 0 && mag > 0) {
+			//	mag = 0
+			//}
+			fmt.Println("player", i, "is unit vector", player, "weighted mag", mag)
+			players[i].mag = mag
+		}
+		//mag := math.Pow(0.5, uGoal.mag/b.wGoal)
+		//fmt.Println("goal is unit vector", uGoal, "weighted mag", mag)
+		//uGoal.mag = mag
 
-	// sum vectors
-	var v Vector
-	for _, bother := range bothers {
-		v = v.add(bother.toVector())
-	}
-	for _, player := range players {
-		v = v.add(player.toVector())
-	}
-	v = v.add(uGoal.toVector())
-	fmt.Println("vector sum", v)
+		// sum vectors
+		var v Vector
+		for _, bother := range bothers {
+			v = v.add(bother.toVector())
+		}
+		for _, player := range players {
+			v = v.add(player.toVector())
+		}
+		//v = v.add(uGoal.toVector())
+		fmt.Println("vector sum", v)
 
-	// get the angle of the vector
-	a := v.angle()
-	fmt.Println("vector angle", a)
-	return a
+		return b.pos.add(Coordinate{v.dx, v.dy})
+	*/
 }
 
 /*****************************************************************************
@@ -435,32 +437,6 @@ func (t Turn) String() string {
 		return "Left"
 	}
 	return "Unknown"
-}
-
-/*****************************************************************************
-* Angle
-*
-* math.Atan2 ->
-* North = pi
-* East = pi/2
-* South = 0
-* West = -pi/2
-*
-* +pi =>
-* North = 2pi (0)
-* East = 3pi/2
-* South = pi
-* West = pi/2
- */
-type Angle float64
-
-func (a1 Angle) Deviation(a2 Angle) Angle {
-	dev := Angle(math.Abs(float64(a1 - a2)))
-	if dev > math.Pi {
-		// the deviation will always be the smaller difference
-		dev = (2 * math.Pi) - dev
-	}
-	return dev
 }
 
 /*****************************************************************************
@@ -618,18 +594,18 @@ func (f Field) print() {
 	}
 }
 
-func findBestMove(b Bother, arena *Arena) {
+func scanMoveField(b Bother, arena *Arena) Field {
 	var f Field
 
-	fmt.Println("set parameters")
-	f.setParameters(b.pos, 10)
+	f.setParameters(b.pos, b.psr)
 
-	f.print()
-	time.Sleep(time.Second * 1)
+	//f.print()
+	//fmt.Println("set parameters")
+	//time.Sleep(time.Second * 1)
 
 	// Prepopulate cells with blocks from arena
 
-	fmt.Println("set blocks")
+	//fmt.Println("set blocks")
 	for x := f.upperLeft.x; x <= f.lowerRight.x; x++ {
 		for y := f.upperLeft.y; y <= f.lowerRight.y; y++ {
 			if inArena(Coordinate{x, y}) {
@@ -645,8 +621,9 @@ func findBestMove(b Bother, arena *Arena) {
 		}
 	}
 
-	f.print()
-	time.Sleep(time.Second * 1)
+	//f.print()
+	//fmt.Println("set blocks")
+	//time.Sleep(time.Second * 1)
 
 	// seed first moves, if not already defined as blocks
 	for _, dir := range []Direction{North, East, South, West} {
@@ -658,24 +635,64 @@ func findBestMove(b Bother, arena *Arena) {
 		}
 	}
 
-	f.print()
-	time.Sleep(time.Second * 1)
+	//f.print()
+	//fmt.Println("seed moves")
+	//time.Sleep(time.Second * 1)
 
 	// propogate moves into the rest of the cells
-	updated := 1
-	for updated > 0 {
+	var updated int
+	for {
 		updated = 0
-		for x := f.upperLeft.x; x <= f.lowerRight.x; x++ {
-			for y := f.upperLeft.y; y <= f.lowerRight.y; y++ {
-				updated += f.setCell(Coordinate{x, y})
+		for i := 0; i <= f.size; i++ {
+			for j := 0; j <= f.size; j++ {
+				// NorthWest quadrant
+				updated += f.setCell(f.center.add(Coordinate{-j, -i}))
+				// NorthEast quadrant
+				updated += f.setCell(f.center.add(Coordinate{i, -j}))
+				// SouthEast quadrant
+				updated += f.setCell(f.center.add(Coordinate{j, i}))
+				// SouthWest quadrant
+				updated += f.setCell(f.center.add(Coordinate{-i, j}))
 			}
 		}
-		f.print()
-		time.Sleep(time.Second * 1)
+		//f.print()
+		//fmt.Println("nr updated", updated)
+		//time.Sleep(time.Second * 1)
+		if updated == 0 {
+			break
+		}
+		updated = 0
+		for i := f.size; i >= 0; i-- {
+			for j := f.size; j >= 0; j-- {
+				// NorthWest quadrant
+				updated += f.setCell(f.center.add(Coordinate{-j, -i}))
+				// NorthEast quadrant
+				updated += f.setCell(f.center.add(Coordinate{i, -j}))
+				// SouthEast quadrant
+				updated += f.setCell(f.center.add(Coordinate{j, i}))
+				// SouthWest quadrant
+				updated += f.setCell(f.center.add(Coordinate{-i, j}))
+			}
+		}
+		//f.print()
+		//fmt.Println("nr updated", updated)
+		if updated == 0 {
+			break
+		}
+		//time.Sleep(time.Second * 1)
 	}
+	//f.print()
+	return f
 }
 
-func (f Field) getMove(goal Coordinate) Direction {
+func abs(i int) int {
+	if i < 0 {
+		return -i
+	}
+	return i
+}
+
+func (b *Bother) getBestMove(f Field, goal Coordinate) Direction {
 	// Check if trapped
 	count := 0
 	for _, dir := range []Direction{North, East, South, West} {
@@ -702,47 +719,47 @@ func (f Field) getMove(goal Coordinate) Direction {
 	// ├─┐ │
 	// ├─┘ │
 	// └───┘
-	u := f.center.makeVector(goal).toUnit()
-	sqrt2 := math.Sqrt(2.0)
-	var dxStart, dxEnd, dyStart, dyEnd int
-	switch {
-	case u.dx < -sqrt2:
-		dxStart = -f.psr
-		dxEnd = 0
-	case u.dx > sqrt2:
-		dxStart = 0
-		dxEnd = f.psr
-	default:
-		dxStart = -f.psr / 2
-		dxEnd = f.psr / 2
-	}
-	switch {
-	case u.dy < -sqrt2:
-		dyStart = -f.psr
-		dyEnd = 0
-	case u.dy > sqrt2:
-		dyStart = 0
-		dyEnd = f.psr
-	default:
-		dyStart = -f.psr / 2
-		dyEnd = f.psr / 2
+	vGoal := b.pos.makeVector(goal)
+	var xStart, xEnd, yStart, yEnd int
+	if abs(vGoal.dy/2) > abs(vGoal.dx) {
+		// direction more vertical
+		xStart = f.upperLeft.x
+		xEnd = f.lowerRight.x
+		if vGoal.dy > 0 {
+			// South
+			yStart = f.center.y
+			yEnd = f.lowerRight.y
+		} else {
+			// North
+			yStart = f.upperLeft.y
+			yEnd = f.center.y
+		}
+	} else {
+		// direction more horizontal
+		yStart = f.upperLeft.y
+		yEnd = f.lowerRight.y
+		if vGoal.dx > 0 {
+			// East
+			xStart = f.center.x
+			xEnd = f.lowerRight.x
+		} else {
+			// West
+			xStart = f.upperLeft.x
+			xEnd = f.center.x
+		}
 	}
 	// Return best move in the sub-region
-	move := f.bestMoveInRange(dxStart, dyStart, dxEnd, dyEnd)
+	move := f.bestMoveInRange(xStart, yStart, xEnd, yEnd)
 	if move != NoMove {
 		return move
 	}
 	// Return best move in the whole field
-	move = f.bestMoveInRange(-f.psr, -f.psr, f.psr, f.psr)
+	move = f.bestMoveInRange(f.upperLeft.x, f.upperLeft.y, f.lowerRight.x, f.lowerRight.y)
 	return move
 }
 
-func (f Field) bestMoveInRange(dxStart, dyStart, dxEnd, dyEnd int) Direction {
+func (f Field) bestMoveInRange(xStart, yStart, xEnd, yEnd int) Direction {
 	dirCounts := make(map[Direction]int)
-	xStart := f.center.x + dxStart
-	yStart := f.center.y + dyStart
-	xEnd := f.center.x + dxEnd
-	yEnd := f.center.y + dyEnd
 	for x := xStart; x <= xEnd; x++ {
 		for y := yStart; y <= yEnd; y++ {
 			dirCounts[f.cellAt(Coordinate{x, y}).move] += 1
