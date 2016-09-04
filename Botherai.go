@@ -4,21 +4,18 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
-	"os"
-	"os/exec"
+	//"os"
+	//"os/exec"
 	"sort"
 	"time"
 )
-
-func init() {
-	rand.Seed(time.Now().UTC().UnixNano())
-}
 
 /*****************************************************************************
 * Bother Type
  */
 type Bother struct {
 	pos      Coordinate
+	new      Coordinate
 	gsr      int // goal scan range
 	psr      int // path scan range
 	arbGoal  Coordinate
@@ -27,110 +24,16 @@ type Bother struct {
 	wArbGoal float64 // arbitrary goal weighting
 }
 
-/*****************************************************************************
-* Arena Type
- */
-
-const arenaWidth, arenaHeight = 100, 100
-
-type Arena [arenaWidth][arenaHeight]byte
-
-const (
-	SpaceType  byte = 0
-	EdgeType   byte = 1
-	BlockType  byte = 2
-	BotherType byte = 3
-	PlayerType byte = 4
-	GoalType   byte = 5 // temporary just for printing simulations
-)
-
-func (arena *Arena) within(c Coordinate) bool {
-	if c.x >= 0 && c.x < arenaWidth && c.y >= 0 && c.y < arenaHeight {
-		return true
-	}
-	return false
-}
-
-func (arena *Arena) generateBlocks() {
-	nrBlocks := int((arenaWidth * arenaHeight) * 0.3)
-	for b := 0; b < nrBlocks; b++ {
-	Retry:
-		for {
-			x, y := rand.Intn(arenaWidth), rand.Intn(arenaHeight)
-			if arena[x][y] == SpaceType {
-				arena[x][y] = BlockType
-				break Retry
-			}
-		}
-	}
-}
-
-/*****************************************************************************
-* Main
- */
-func main() {
-	fmt.Println("Bother AI")
-	var b Bother
-	b.pos = Coordinate{50, 50}
-	b.gsr = 20
-	b.psr = 20
-	b.wPlayer = 30
-	b.wBother = 10
-	b.wArbGoal = 1
-	b.arbGoal = Coordinate{70, 50}
-
-	var arena Arena
-	arena[b.pos.x][b.pos.y] = BotherType
-	//arena[b.goal.x][b.goal.y] = GoalType
-	arena[65][55] = PlayerType
-	//arena[45][35] = PlayerType
-	//arena[47][33] = BotherType
-	//arena[52][53] = BotherType
-
-	arena.generateBlocks()
-
-	// build the wall
-	if false {
-		for y := 30; y < 70; y++ {
-			arena[60][y] = BlockType
-		}
-		for x := 60; x < 63; x++ {
-			arena[x][49] = BlockType
-			arena[x][51] = BlockType
-		}
-		arena[60][50] = SpaceType
-		arena[62][50] = BlockType
-		arena[60][52] = SpaceType
-	}
-
-	for {
-
-		dir := b.botherAI(&arena)
-		fmt.Println("move=", dir)
-
-		newPos := b.pos.add(dir.toDisplacement())
-
-		if !arena.within(newPos) {
-			fmt.Println("moved out of arena!?!?!")
-			break
-		}
-		if arena[newPos.x][newPos.y] == SpaceType {
+// this is run in the arena goroutine
+func (b *Bother) move(arena *Arena) {
+	//fmt.Printf("%d, %d -- %d, %d    %s\n", b.x, b.y, b.newx, b.newy, b.name)
+	if arena.within(b.new) {
+		if arena[b.new.x][b.new.y] == SpaceType {
 			arena[b.pos.x][b.pos.y] = SpaceType
-			arena[newPos.x][newPos.y] = BotherType
-			b.pos = newPos
+			arena[b.new.x][b.new.y] = BotherType
+			b.pos = b.new
 		}
-		clear()
-		b.printSensoryRange(&arena)
-		time.Sleep(time.Millisecond * 100)
 	}
-
-}
-
-func clear() {
-	cmd := exec.Command("clear") // for Linux
-	/* cmd := exec.Command("cls") // for Windows */
-	cmd.Stdout = os.Stdout
-	cmd.Run()
 }
 
 func (b *Bother) printSensoryRange(arena *Arena) {
@@ -155,8 +58,6 @@ func (b *Bother) printSensoryRange(arena *Arena) {
 					}
 				case PlayerType:
 					line += "@"
-				case GoalType:
-					line += "+"
 				default:
 					line += "?"
 				}
@@ -166,12 +67,14 @@ func (b *Bother) printSensoryRange(arena *Arena) {
 	}
 }
 
-// botherAI returns its desired vector movement
-func (b *Bother) botherAI(arena *Arena) Direction {
+// this runs in its own goroutine
+func (b *Bother) ai(arena *Arena, done chan *Bother) {
+	time.Sleep(time.Duration(rand.Intn(500)+300) * time.Millisecond)
 	goals := b.findBestGoal(arena)
-	f := scanMoveField(*b, arena)
+	f := b.scanMoveField(arena)
 	dir := b.getBestMove(f, goals)
-	return dir
+	b.new = dir.add(b.pos)
+	done <- b
 }
 
 type Goal struct {
@@ -206,14 +109,14 @@ func (b *Bother) findBestGoal(arena *Arena) Goals {
 				v := b.pos.displacement(xy).toVector()
 				switch {
 				case arena[x][y] == BotherType:
-					fmt.Println("found bother at", xy)
+					fmt.Println("bother at", xy)
 					if x == b.pos.x && y == b.pos.y {
 						fmt.Println("it's me!")
 					} else {
 						goals = append(goals, Goal{xy, b.wBother / v.mag})
 					}
-				case arena[x][y] == PlayerType:
-					fmt.Println("found player at", xy)
+				case arena[x][y] >= PlayerType:
+					fmt.Println("player at", xy)
 					goals = append(goals, Goal{xy, b.wPlayer / v.mag})
 				}
 			}
@@ -224,7 +127,7 @@ func (b *Bother) findBestGoal(arena *Arena) Goals {
 	goals = append(goals, Goal{b.arbGoal, b.wArbGoal / v.mag})
 
 	sort.Sort(goals)
-	fmt.Println(goals)
+	fmt.Println("goals", goals)
 	return goals
 
 	//fmt.Println("no goals!")
@@ -386,7 +289,7 @@ func (f Field) print() {
 	}
 }
 
-func scanMoveField(b Bother, arena *Arena) Field {
+func (b Bother) scanMoveField(arena *Arena) Field {
 	var f Field
 
 	f.setParameters(b.pos, b.psr)
@@ -571,64 +474,6 @@ func (b *Bother) getBestMove(f Field, goals Goals) Direction {
 	// No other move was found
 	move := f.bestMoveInRange(f.upperLeft.x, f.upperLeft.y, f.lowerRight.x, f.lowerRight.y)
 	return move
-
-	/*
-		// Check if goal within field but unreachable
-
-		// Check if goal is outside field
-		// get best move the is along vector
-
-		// Return best direction along vector
-		// ┌┐└┘│─├┤┬┴
-		// ┌───┐
-		// │   │
-		// └───┘
-		// ┌─┬─┐ ┌┬─┬┐ ┌─┬─┐
-		// ├─┘ │ │└─┘│ │ └─┤
-		// └───┘ └───┘ └───┘
-		// ┌───┐
-		// ├─┐ │
-		// ├─┘ │
-		// └───┘
-		vGoal := b.pos.makeVector(goal)
-		var xStart, xEnd, yStart, yEnd int
-		if abs(vGoal.dy/2) > abs(vGoal.dx) {
-			// direction more vertical
-			xStart = f.upperLeft.x
-			xEnd = f.lowerRight.x
-			if vGoal.dy > 0 {
-				// South
-				yStart = f.center.y
-				yEnd = f.lowerRight.y
-			} else {
-				// North
-				yStart = f.upperLeft.y
-				yEnd = f.center.y
-			}
-		} else {
-			// direction more horizontal
-			yStart = f.upperLeft.y
-			yEnd = f.lowerRight.y
-			if vGoal.dx > 0 {
-				// East
-				xStart = f.center.x
-				xEnd = f.lowerRight.x
-			} else {
-				// West
-				xStart = f.upperLeft.x
-				xEnd = f.center.x
-			}
-		}
-
-		// TODO no...
-		// Return best move in the sub-region
-		move := f.bestMoveInRange(xStart, yStart, xEnd, yEnd)
-		if move != NoMove {
-			return move
-		}
-	*/
-	// TODO no...
-	// Return best move in the whole field
 }
 
 func (f Field) bestMoveInRange(xStart, yStart, xEnd, yEnd int) Direction {
@@ -651,3 +496,73 @@ func (f Field) bestMoveInRange(xStart, yStart, xEnd, yEnd int) Direction {
 	}
 	return bestMove
 }
+
+/*****************************************************************************
+* Main
+ */
+/*
+func main() {
+	fmt.Println("Bother AI")
+	var b Bother
+	b.pos = Coordinate{50, 50}
+	b.gsr = 20
+	b.psr = 20
+	b.wPlayer = 30
+	b.wBother = 10
+	b.wArbGoal = 1
+	b.arbGoal = Coordinate{70, 50}
+
+	var arena Arena
+	arena[b.pos.x][b.pos.y] = BotherType
+	//arena[b.goal.x][b.goal.y] = GoalType
+	arena[65][55] = PlayerType
+	//arena[45][35] = PlayerType
+	//arena[47][33] = BotherType
+	//arena[52][53] = BotherType
+
+	arena.generateBlocks()
+
+	// build the wall
+	if false {
+		for y := 30; y < 70; y++ {
+			arena[60][y] = BlockType
+		}
+		for x := 60; x < 63; x++ {
+			arena[x][49] = BlockType
+			arena[x][51] = BlockType
+		}
+		arena[60][50] = SpaceType
+		arena[62][50] = BlockType
+		arena[60][52] = SpaceType
+	}
+
+	for {
+
+		dir := b.botherAI(&arena)
+		fmt.Println("move=", dir)
+
+		newPos := b.pos.add(dir.toDisplacement())
+
+		if !arena.within(newPos) {
+			fmt.Println("moved out of arena!?!?!")
+			break
+		}
+		if arena[newPos.x][newPos.y] == SpaceType {
+			arena[b.pos.x][b.pos.y] = SpaceType
+			arena[newPos.x][newPos.y] = BotherType
+			b.pos = newPos
+		}
+		clear()
+		b.printSensoryRange(&arena)
+		time.Sleep(time.Millisecond * 100)
+	}
+
+}
+
+func clear() {
+	cmd := exec.Command("clear") // for Linux
+	// cmd := exec.Command("cls") // for Windows
+	cmd.Stdout = os.Stdout
+	cmd.Run()
+}
+*/

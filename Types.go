@@ -98,6 +98,16 @@ func (dir Direction) turnLeft() Direction {
 	return dir
 }
 
+// North->South, South->North    West+1, 5-4=1=North
+// East->West, West->East        West+2, 6-4=2=East
+func (dir Direction) behind() Direction {
+	dir += 2
+	if dir > West {
+		dir -= 4
+	}
+	return dir
+}
+
 /*
 // turnTo(Right): North->East->South->West->North
 // turnTo(South): North->West->South->East->North

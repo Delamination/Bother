@@ -31,7 +31,14 @@ const (
 
 const arenaWidth, arenaHeight = 70, 40
 
-var nrMonsters = 10
+func (arena *Arena) within(c Coordinate) bool {
+	if c.x >= 0 && c.x < arenaWidth && c.y >= 0 && c.y < arenaHeight {
+		return true
+	}
+	return false
+}
+
+var nrBothers = 10
 
 func main() {
 	runArena()
@@ -40,49 +47,8 @@ func main() {
 }
 
 /*****************************************************************************
-* Monster
+* Bother
  */
-type Monster struct {
-	x, y       int
-	newx, newy int
-	name       string
-}
-
-// this is run in the arena goroutine
-func (m *Monster) move(arena *Arena) {
-	//fmt.Printf("%d, %d -- %d, %d    %s\n", m.x, m.y, m.newx, m.newy, m.name)
-	if inArena(m.newx, m.newy) {
-		if arena[m.newx][m.newy] == SpaceType {
-			arena[m.x][m.y] = SpaceType
-			arena[m.newx][m.newy] = BotherType
-			m.x, m.y = m.newx, m.newy
-		}
-	}
-}
-
-// this runs in its own goroutine
-func (m *Monster) ai(arena *Arena, done chan *Monster) {
-	time.Sleep(time.Duration(rand.Intn(500)+300) * time.Millisecond)
-	switch rand.Intn(4) {
-	case 0:
-		m.newx, m.newy = m.x+1, m.y
-	case 1:
-		m.newx, m.newy = m.x-1, m.y
-	case 2:
-		m.newx, m.newy = m.x, m.y+1
-	case 3:
-		m.newx, m.newy = m.x, m.y-1
-	}
-	done <- m
-}
-
-// this runs in its own goroutine
-func (m *Monster) advancedAI(arena *Arena, done chan *Monster) {
-	// Move towards highest weighted entity, player weighted twice as
-	// much as other bothers.
-	done <- m
-}
-
 /*****************************************************************************
 * Player
 *
@@ -90,12 +56,12 @@ func (m *Monster) advancedAI(arena *Arena, done chan *Monster) {
  */
 
 type Player struct {
-	addr   string
-	nr     byte
-	moving bool
-	pull   bool
-	x, y   int
-	dx, dy int
+	addr    string
+	nr      byte
+	moving  bool
+	pull    bool
+	pos     Coordinate
+	moveReq Direction
 }
 
 type RcvdData struct {
@@ -207,43 +173,51 @@ func runPlayer(move chan *Player, create chan *Player, done chan *Player, update
 					switch n.msg[0] {
 					// push directions
 					case 'u':
-						p.dx, p.dy = 0, -1
+						p.moveReq = North
+						//p.dx, p.dy = 0, -1
 						p.pull = false
 						p.moving = true // we no longer have access to the player data
 						move <- p       // send pointer to player to arena
 					case 'r':
-						p.dx, p.dy = 1, 0
+						p.moveReq = East
+						//p.dx, p.dy = 1, 0
 						p.pull = false
 						p.moving = true
 						move <- p
 					case 'd':
-						p.dx, p.dy = 0, 1
+						p.moveReq = South
+						//p.dx, p.dy = 0, 1
 						p.pull = false
 						p.moving = true
 						move <- p
 					case 'l':
-						p.dx, p.dy = -1, 0
+						p.moveReq = West
+						//p.dx, p.dy = -1, 0
 						p.pull = false
 						p.moving = true
 						move <- p
 					// pull directions
 					case 'U':
-						p.dx, p.dy = 0, -1
+						p.moveReq = North
+						//p.dx, p.dy = 0, -1
 						p.pull = true
 						p.moving = true
 						move <- p
 					case 'R':
-						p.dx, p.dy = 1, 0
+						p.moveReq = East
+						//p.dx, p.dy = 1, 0
 						p.pull = true
 						p.moving = true
 						move <- p
 					case 'D':
-						p.dx, p.dy = 0, 1
+						p.moveReq = South
+						//p.dx, p.dy = 0, 1
 						p.pull = true
 						p.moving = true
 						move <- p
 					case 'L':
-						p.dx, p.dy = -1, 0
+						p.moveReq = West
+						//p.dx, p.dy = -1, 0
 						p.pull = true
 						p.moving = true
 						move <- p
@@ -269,55 +243,51 @@ func runPlayer(move chan *Player, create chan *Player, done chan *Player, update
 	}
 }
 
-func inArena(x, y int) bool {
-	if x < 0 || x >= arenaWidth || y < 0 || y >= arenaHeight {
-		return false
-	}
-	return true
-}
-
 // this is run in the arena goroutine
 // move blocks
 func (p *Player) move(arena *Arena) {
-	newx, newy := p.x+p.dx, p.y+p.dy
-	fmt.Printf("%d: %d, %d --> %d, %d\n", p.nr, p.x, p.y, newx, newy)
+	newPos := p.moveReq.add(p.pos)
+	//newx, newy := p.x+p.dx, p.y+p.dy
+	//fmt.Printf("%d: %d, %d --> %d, %d\n", p.nr, p.x, p.y, newx, newy)
 	// Move if space empty and not out of arena.
 	// Pull if block behind player.
 	if p.pull {
-		if inArena(newx, newy) {
-			if arena[newx][newy] == SpaceType {
+		if arena.within(newPos) {
+			if arena[newPos.x][newPos.y] == SpaceType {
 				// can move
-				arena[newx][newy] = PlayerType + p.nr
-				pullx, pully := p.x-p.dx, p.y-p.dy
-				if inArena(pullx, pully) && arena[pullx][pully] == BlockType {
+				arena[newPos.x][newPos.y] = PlayerType + p.nr
+				pullPos := p.moveReq.behind().add(p.pos)
+				//pullx, pully := p.x-p.dx, p.y-p.dy
+				if arena.within(pullPos) && arena[pullPos.x][pullPos.y] == BlockType {
 					// pull block
-					arena[p.x][p.y] = BlockType
-					arena[pullx][pully] = SpaceType
+					arena[p.pos.x][p.pos.y] = BlockType
+					arena[pullPos.x][pullPos.y] = SpaceType
 				} else {
 					// just move
-					arena[p.x][p.y] = SpaceType
+					arena[p.pos.x][p.pos.y] = SpaceType
 				}
-				p.x, p.y = newx, newy
+				p.pos = newPos
 			}
 		}
 	} else {
 		// scan move direction, stop anything that is not a block
 		stoppedBy := SpaceType
 		blockCount := 0
-		blkx, blky := newx, newy
+		blk := newPos
 		for {
-			if !inArena(blkx, blky) {
+			if !arena.within(blk) {
 				stoppedBy = EdgeType
 				break
 			}
-			if stoppedBy = arena[blkx][blky]; stoppedBy != BlockType {
+			if stoppedBy = arena[blk.x][blk.y]; stoppedBy != BlockType {
 				break
 			}
 			blockCount++
-			blkx, blky = blkx+p.dx, blky+p.dy
+			blk = p.moveReq.add(blk)
+			//blk = blkx+p.dx, blky+p.dy
 		}
 		// possibilities:
-		// - player's move is immediately blocked by another player, edge, monster
+		// - player's move is immediately blocked by another player, edge, bother
 		// - player cannot push blocks because at some point the blocks are blocked
 		// - player can move into empty space
 		// - player can push a number of blocks into an empty space
@@ -326,12 +296,12 @@ func (p *Player) move(arena *Arena) {
 			return
 		}
 		// the move ends in a space
-		arena[p.x][p.y] = SpaceType
-		arena[newx][newy] = PlayerType + p.nr
-		p.x, p.y = newx, newy
+		arena[p.pos.x][p.pos.y] = SpaceType
+		arena[newPos.x][newPos.y] = PlayerType + p.nr
+		p.pos = newPos
 		if blockCount > 0 {
 			// we can push some blocks!!
-			arena[blkx][blky] = BlockType
+			arena[blk.x][blk.y] = BlockType
 		}
 	}
 }
@@ -342,7 +312,7 @@ Retry:
 	for {
 		x, y := rand.Intn(arenaWidth), rand.Intn(arenaHeight)
 		if arena[x][y] == SpaceType {
-			p.x, p.y = x, y
+			p.pos = Coordinate{x, y}
 			arena[x][y] = PlayerType + p.nr
 			break Retry
 		}
@@ -356,54 +326,53 @@ Retry:
 
 func runArena() {
 	var arena Arena
-	generateBorder(&arena)
-	generateBlocks(&arena)
+	arena.generateBorders()
+	arena.generateBlocks()
 
-	monsterMove := make(chan *Monster, 10)
-	monsters := generateMonsters(&arena)
-	// start an ai goroutine for each monster
-	for _, m := range monsters {
-		//fmt.Println("starting " + m.name)
+	botherMoveChan := make(chan *Bother, 10)
+	bothers := arena.generateBothers(nrBothers)
+	// start an ai goroutine for each bother
+	for _, b := range bothers {
 		var arenaCopy Arena
 		arenaCopy = arena
-		m2 := m
-		go m2.ai(&arenaCopy, monsterMove)
+		b2 := b
+		go b2.ai(&arenaCopy, botherMoveChan)
 	}
 
-	playerMove := make(chan *Player, 10)
-	playerCreate := make(chan *Player, 10)
-	playerDone := make(chan *Player, 10)
-	updateClients := make(chan CompressedArena) // unbuffered
-	go runPlayer(playerMove, playerCreate, playerDone, updateClients)
+	playerMoveChan := make(chan *Player, 10)
+	playerCreateChan := make(chan *Player, 10)
+	playerDoneChan := make(chan *Player, 10)
+	updateClientsChan := make(chan CompressedArena) // unbuffered
+	go runPlayer(playerMoveChan, playerCreateChan, playerDoneChan, updateClientsChan)
 
 	// start update timer
-	updateTimer := make(chan bool) // unbuffered??
+	updateTimerChan := make(chan bool) // unbuffered??
 	go func(u chan bool) {
 		clear()
 		for {
 			time.Sleep(50 * time.Millisecond)
 			u <- true
 		}
-	}(updateTimer)
+	}(updateTimerChan)
 
 	// listen for events
 	for {
 		select {
-		case m := <-monsterMove:
+		case b := <-botherMoveChan:
 			//fmt.Println(m.name + " moved")
-			m.move(&arena)
+			b.move(&arena)
 			var arenaCopy Arena // need to pass a copy of arena to goroutine
 			arenaCopy = arena
-			go m.ai(&arenaCopy, monsterMove)
-		case p := <-playerCreate:
+			go b.ai(&arenaCopy, botherMoveChan)
+		case p := <-playerCreateChan:
 			fmt.Println("create")
 			p.create(&arena)
-			playerDone <- p
-		case p := <-playerMove:
+			playerDoneChan <- p
+		case p := <-playerMoveChan:
 			fmt.Println("move")
 			p.move(&arena)
-			playerDone <- p
-		case <-updateTimer:
+			playerDoneChan <- p
+		case <-updateTimerChan:
 			displayArena(arena)
 			// compress the arena data
 			var buf bytes.Buffer
@@ -416,16 +385,18 @@ func runArena() {
 				w.Write(arena[x][:])
 			}
 			w.Close()
-			updateClients <- CompressedArena{buf}
+			updateClientsChan <- CompressedArena{buf}
 		}
 	}
 }
 
-func generateBorder(arena *Arena) {
+func (arena *Arena) generateBorders() {
+	// generate North and South borders
 	for x := 0; x < arenaWidth; x++ {
 		arena[x][0] = EdgeType
 		arena[x][arenaHeight-1] = EdgeType
 	}
+	// generate East and West borders
 	for y := 0; y < arenaHeight; y++ {
 		arena[0][y] = EdgeType
 		arena[arenaWidth-1][y] = EdgeType
@@ -446,7 +417,7 @@ func generatePillars(arena *Arena) {
 	}
 }
 
-func generateBlocks(arena *Arena) {
+func (arena *Arena) generateBlocks() {
 	nrBlocks := int((arenaWidth * arenaHeight) * 0.2)
 	for b := 0; b < nrBlocks; b++ {
 	Retry:
@@ -460,21 +431,20 @@ func generateBlocks(arena *Arena) {
 	}
 }
 
-func generateMonsters(arena *Arena) []Monster {
-	names := []string{"steve", "bob", "ralph", "gary", "al", "norm", "horace", "lance", "peter", "edmund"}
-	monsters := make([]Monster, nrMonsters)
-	for i := 0; i < nrMonsters; i++ {
+func (arena *Arena) generateBothers(nr int) []Bother {
+	bothers := make([]Bother, nrBothers)
+	for i := 0; i < nr; i++ {
 	Retry:
 		for {
 			x, y := rand.Intn(arenaWidth), rand.Intn(arenaHeight)
 			if arena[x][y] == SpaceType {
-				monsters[i] = Monster{x: x, y: y, name: names[i]}
+				bothers[i] = Bother{pos: Coordinate{x, y}, gsr: 20, psr: 20, wPlayer: 50, wBother: 5, wArbGoal: 1}
 				arena[x][y] = BotherType
 				break Retry
 			}
 		}
 	}
-	return monsters
+	return bothers
 }
 
 func clear() {
