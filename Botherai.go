@@ -2,7 +2,7 @@ package main
 
 import (
 	"fmt"
-	"math"
+	//"math"
 	"math/rand"
 	//"os"
 	//"os/exec"
@@ -14,31 +14,66 @@ import (
 * Bother Type
  */
 type Bother struct {
-	pos      Coordinate
-	new      Coordinate
-	gsr      int // goal scan range
-	psr      int // path scan range
-	arbGoal  Coordinate
-	wPlayer  float64 // player goal weighting
-	wBother  float64 // bother goal weighting
-	wArbGoal float64 // arbitrary goal weighting
+	pos         Coordinate
+	new         Coordinate
+	gsr         int // goal scan range
+	psr         int // path scan range
+	arbGoal     Coordinate
+	wPlayer     float64 // player goal weighting
+	wBother     float64 // bother goal weighting
+	wArbGoal    float64 // arbitrary goal weighting
+	minBother   float64 // minimum distance where bothers attract each other
+	boredThresh int     // number of bothers before becoming bored and moving off
+	bored       bool
+	botherings  int // number of consecutive bothers delivered to a player
+}
+
+func MakeBother(pos Coordinate) Bother {
+	b := Bother{}
+	b.pos = pos
+	b.gsr = 20
+	b.psr = 20
+	b.arbGoal = pos
+	b.wPlayer = 30.0
+	b.wBother = 10.0
+	b.wArbGoal = 1.0
+	b.minBother = 5.0
+	b.boredThresh = 5
+	return b
 }
 
 // this is run in the arena goroutine
-func (b *Bother) move(arena *Arena) {
+func (b *Bother) move(arena *Arena, bothered chan uint8) {
 	//fmt.Printf("%d, %d -- %d, %d    %s\n", b.x, b.y, b.newx, b.newy, b.name)
 	if arena.within(b.new) {
-		if arena[b.new.x][b.new.y] == SpaceType {
+		switch {
+		case arena[b.new.x][b.new.y] == SpaceType:
 			arena[b.pos.x][b.pos.y] = SpaceType
 			arena[b.new.x][b.new.y] = BotherType
 			b.pos = b.new
+			// bother becomes less bored if it can move
+			if b.bored {
+				b.botherings--
+				if b.botherings <= 0 {
+					b.bored = false
+				}
+			} else {
+				// botherings only accumulate while bothering a player
+				b.botherings = 0
+			}
+		case arena[b.new.x][b.new.y] >= PlayerType:
+			b.botherings++ // botherings increase even if we accidentally bother while bored
+			if b.botherings >= b.boredThresh {
+				b.bored = true
+			}
+			bothered <- arena[b.new.x][b.new.y] - PlayerType // channel indicating which player was bothered
 		}
 	}
 }
 
 func (b *Bother) printSensoryRange(arena *Arena) {
 	//clear()
-	fmt.Println("sensory range", b.gsr)
+	//fmt.Println("sensory range", b.gsr)
 	for y := b.pos.y - b.gsr; y < b.pos.y+b.gsr; y++ {
 		var line string
 		for x := b.pos.x - b.gsr; x < b.pos.x+b.gsr; x++ {
@@ -72,7 +107,7 @@ func (b *Bother) ai(arena *Arena, done chan *Bother) {
 	time.Sleep(time.Duration(rand.Intn(500)+300) * time.Millisecond)
 	goals := b.findBestGoal(arena)
 	f := b.scanMoveField(arena)
-	dir := b.getBestMove(f, goals)
+	dir := b.getBestMove(f, goals, arena)
 	b.new = dir.add(b.pos)
 	done <- b
 }
@@ -80,6 +115,7 @@ func (b *Bother) ai(arena *Arena, done chan *Bother) {
 type Goal struct {
 	pos    Coordinate
 	weight float64
+	typ    uint8
 }
 
 type Goals []Goal
@@ -92,7 +128,7 @@ func (goals Goals) Swap(i, j int) {
 	goals[i], goals[j] = goals[j], goals[i]
 }
 
-// Force to sort by decreasing weights
+// Force to sort from largest to smallest goal weighting
 func (goals Goals) Less(i, j int) bool {
 	return goals[i].weight > goals[j].weight
 }
@@ -109,25 +145,34 @@ func (b *Bother) findBestGoal(arena *Arena) Goals {
 				v := b.pos.displacement(xy).toVector()
 				switch {
 				case arena[x][y] == BotherType:
-					fmt.Println("bother at", xy)
 					if x == b.pos.x && y == b.pos.y {
-						fmt.Println("it's me!")
+						//fmt.Println("it's me!")
 					} else {
-						goals = append(goals, Goal{xy, b.wBother / v.mag})
+						//fmt.Println("bother at", xy)
+						if v.mag > b.minBother { // bothers too close together, no longer attract
+							goals = append(goals, Goal{xy, b.wBother / v.mag, arena[x][y]})
+						}
 					}
 				case arena[x][y] >= PlayerType:
-					fmt.Println("player at", xy)
-					goals = append(goals, Goal{xy, b.wPlayer / v.mag})
+					//fmt.Println("player at", xy)
+					if b.bored {
+						// bored with bothering, go the other way
+						fmt.Println("Bored!!!")
+						antiGoal := xy.add(b.pos.displacement(xy).turnBehind())
+						goals = append(goals, Goal{antiGoal, b.wPlayer / v.mag, PlayerType}) // NOTE is PlayerType the best choice here?
+					} else {
+						goals = append(goals, Goal{xy, b.wPlayer / v.mag, arena[x][y]})
+					}
 				}
 			}
 		}
 	}
-	// goal is not subject to sensory range
+	// arbitrary goal is not subject to sensory range
 	v := b.pos.displacement(b.arbGoal).toVector()
-	goals = append(goals, Goal{b.arbGoal, b.wArbGoal / v.mag})
+	goals = append(goals, Goal{b.arbGoal, b.wArbGoal / v.mag, SpaceType})
 
 	sort.Sort(goals)
-	fmt.Println("goals", goals)
+	//fmt.Println("goals", goals)
 	return goals
 
 	//fmt.Println("no goals!")
@@ -166,9 +211,9 @@ func (f *Field) setParameters(center Coordinate, psr int) {
 	f.center = center
 	f.psr = psr
 	f.upperLeft.x, f.upperLeft.y = center.x-psr, center.y-psr
-	fmt.Println("ul", f.upperLeft)
+	//fmt.Println("ul", f.upperLeft)
 	f.lowerRight.x, f.lowerRight.y = center.x+psr, center.y+psr
-	fmt.Println("lr", f.lowerRight)
+	//fmt.Println("lr", f.lowerRight)
 	f.size = (psr * 2) + 1
 	f.cells = make([][]Cell, f.size)
 	for i := 0; i < f.size; i++ {
@@ -184,7 +229,7 @@ func (f *Field) setBlockagesFromArena(arena *Arena) {
 			xy := Coordinate{x, y}
 			if arena.within(xy) {
 				switch arena[x][y] {
-				case BlockType, EdgeType:
+				case BlockType, EdgeType, BotherType:
 					f.cellAt(xy).defined = true
 					f.cellAt(xy).move = NoMove
 				}
@@ -226,7 +271,7 @@ func (f Field) compareCells(cell1, cell2 Coordinate) bool {
 // If cell is set to NoMove, it is not reachable (could be a BlockType)
 func (f Field) setCell(pos Coordinate) int {
 	updated := false
-	for _, dir := range []Direction{North, East, South, West} {
+	for _, dir := range allDirections {
 		//fmt.Println(pos, dir)
 		if u := f.compareCells(pos, dir.add(pos)); u == true {
 			updated = true
@@ -308,7 +353,7 @@ func (b Bother) scanMoveField(arena *Arena) Field {
 	//time.Sleep(time.Second * 1)
 
 	// seed first moves, if not already defined as blocks
-	for _, dir := range []Direction{North, East, South, West} {
+	for _, dir := range allDirections {
 		c := f.cellAt(dir.add(b.pos))
 		if !c.defined {
 			c.defined = true
@@ -325,7 +370,7 @@ func (b Bother) scanMoveField(arena *Arena) Field {
 	var updated int
 	for {
 		updated = 0
-		// scan from center outward within each quadrant
+		// scan from center of field outward within each quadrant
 		for i := 0; i <= f.psr; i++ {
 			for j := 0; j <= f.psr; j++ {
 				// NorthWest quadrant
@@ -345,7 +390,7 @@ func (b Bother) scanMoveField(arena *Arena) Field {
 			break
 		}
 		updated = 0
-		// scan from outside inward within each quadrant
+		// scan from outside of field inward within each quadrant
 		for i := f.psr; i >= 0; i-- {
 			for j := f.psr; j >= 0; j-- {
 				// NorthWest quadrant
@@ -369,33 +414,6 @@ func (b Bother) scanMoveField(arena *Arena) Field {
 	return f
 }
 
-// Integer absolute value function.
-func abs(i int) int {
-	if i < 0 {
-		return -i
-	}
-	return i
-}
-
-// Scale integer accoridng to ratio of new/old.
-func scale(val, new, old int) int {
-	ratio := math.Abs(float64(new) / float64(old))
-	scaled := math.Abs(float64(val) * ratio)
-	rounded := math.Floor(scaled + 0.5)
-	if val < 0 {
-		return -int(rounded)
-	}
-	return int(rounded)
-}
-
-// Apply the sign of signed to val.
-func applySign(val, signed int) int {
-	if signed < 0 {
-		return -abs(val)
-	}
-	return abs(val)
-}
-
 // Does not check if goal is within field, or if goal is 0,0.
 // Caller must ensure these conditions!
 func (f *Field) clip(goal Coordinate) Coordinate {
@@ -412,10 +430,10 @@ func (f *Field) clip(goal Coordinate) Coordinate {
 	return f.center.add(d)
 }
 
-func (b *Bother) getBestMove(f Field, goals Goals) Direction {
+func (b *Bother) getBestMove(f Field, goals Goals, arena *Arena) Direction {
 	// Check if trapped
 	noMoveCount := 0
-	for _, dir := range []Direction{North, East, South, West} {
+	for _, dir := range allDirections {
 		if f.cellAt(dir.add(f.center)).move == NoMove {
 			noMoveCount += 1
 		}
@@ -424,45 +442,57 @@ func (b *Bother) getBestMove(f Field, goals Goals) Direction {
 		return NoMove
 	}
 
-	goal := goals[0].pos
+	goal := goals[0]
+
+	// adjust arbitrary goal
+	// if goal is player, and is reachable, then set arbgoal to goal
+	if goal.typ == PlayerType && f.within(goal.pos) && f.cellAt(goal.pos).move != NoMove {
+		b.arbGoal = goal.pos
+	} else {
+		// else randomly move arbitrary goal
+		newGoal := randDirection().add(b.arbGoal)
+		if arena.within(newGoal) {
+			b.arbGoal = newGoal
+		}
+	}
 
 	// Check if goal is outside the field
-	if !f.within(goal) {
+	if !f.within(goal.pos) {
 		// find a point along vector within the field
-		goal = f.clip(goal)
+		goal.pos = f.clip(goal.pos)
 	}
 
 	// Check if goal is in the field and has a move
-	if f.within(goal) {
-		if move := f.cellAt(goal).move; move != NoMove {
+	if f.within(goal.pos) {
+		if move := f.cellAt(goal.pos).move; move != NoMove {
 			return move
 		}
 	}
 
 	// engage persistence!!!!  don't give up!!!!  this is a good day to die!!!
-	// check in increasing spiral for the first available move
+	// check in an increasing spiral for the first valid move
 	var subgoal Coordinate
 	for i := 1; i <= f.psr; i++ {
 		for j := -i; j < i; j++ { // j intentionally limited to i-1
-			subgoal = goal.add(Displacement{j, -i})
+			subgoal = goal.pos.add(Displacement{j, -i})
 			if f.within(subgoal) {
 				if move := f.cellAt(subgoal).move; move != NoMove {
 					return move
 				}
 			}
-			subgoal = goal.add(Displacement{i, j})
+			subgoal = goal.pos.add(Displacement{i, j})
 			if f.within(subgoal) {
 				if move := f.cellAt(subgoal).move; move != NoMove {
 					return move
 				}
 			}
-			subgoal = goal.add(Displacement{-j, i})
+			subgoal = goal.pos.add(Displacement{-j, i})
 			if f.within(subgoal) {
 				if move := f.cellAt(subgoal).move; move != NoMove {
 					return move
 				}
 			}
-			subgoal = goal.add(Displacement{-i, -j})
+			subgoal = goal.pos.add(Displacement{-i, -j})
 			if f.within(subgoal) {
 				if move := f.cellAt(subgoal).move; move != NoMove {
 					return move

@@ -3,7 +3,35 @@ package main
 import (
 	//"fmt"
 	"math"
+	"math/rand"
 )
+
+// Integer absolute value function.
+func abs(i int) int {
+	if i < 0 {
+		return -i
+	}
+	return i
+}
+
+// Scale integer accoridng to ratio of new/old.
+func scale(val, new, old int) int {
+	ratio := math.Abs(float64(new) / float64(old))
+	scaled := math.Abs(float64(val) * ratio)
+	rounded := math.Floor(scaled + 0.5)
+	if val < 0 {
+		return -int(rounded)
+	}
+	return int(rounded)
+}
+
+// Apply the sign of signed to val.
+func applySign(val, signed int) int {
+	if signed < 0 {
+		return -abs(val)
+	}
+	return abs(val)
+}
 
 /*****************************************************************************
 * Coordinate Type
@@ -45,6 +73,11 @@ func (dis Displacement) toVector() Vector {
 	v.angle = math.Atan2(float64(-dis.dx), float64(dis.dy)) + math.Pi
 	v.mag = math.Sqrt(float64(dis.dx*dis.dx) + float64(dis.dy*dis.dy))
 	return v
+}
+
+func (dis Displacement) turnBehind() Displacement {
+	dis.dx, dis.dy = -dis.dy, -dis.dx
+	return dis
 }
 
 /*****************************************************************************
@@ -153,6 +186,12 @@ func (dir Direction) add(pos Coordinate) Coordinate {
 	return pos
 }
 
+var allDirections []Direction = []Direction{North, East, South, West}
+
+func randDirection() Direction {
+	return allDirections[rand.Intn(3)+1]
+}
+
 /*****************************************************************************
 * Turn Type
  */
@@ -160,20 +199,22 @@ func (dir Direction) add(pos Coordinate) Coordinate {
 type Turn int
 
 const (
-	Straight Turn = 0
-	Right    Turn = 1
-	Left     Turn = -1
-	Around   Turn = 2
+	Ahead  Turn = 0
+	Right  Turn = 1
+	Left   Turn = -1
+	Behind Turn = 2
 )
 
 func (t Turn) String() string {
 	switch t {
-	case Straight:
-		return "Straight"
+	case Ahead:
+		return "Ahead"
 	case Right:
 		return "Right"
 	case Left:
 		return "Left"
+	case Behind:
+		return "Behind"
 	}
 	return "Unknown"
 }

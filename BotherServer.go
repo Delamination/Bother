@@ -56,12 +56,13 @@ func main() {
  */
 
 type Player struct {
-	addr    string
-	nr      byte
-	moving  bool
-	pull    bool
-	pos     Coordinate
-	moveReq Direction
+	addr       string
+	nr         byte
+	botherings uint8
+	moving     bool
+	pull       bool
+	pos        Coordinate
+	moveReq    Direction
 }
 
 type RcvdData struct {
@@ -130,7 +131,7 @@ func runNet(rcvd chan RcvdData, xmt chan XmtData) {
 }
 
 // listen to playernet and playerdone channels
-func runPlayer(move chan *Player, create chan *Player, done chan *Player, update chan CompressedArena) {
+func runPlayer(move chan *Player, create chan *Player, done chan *Player, bothered chan uint8, update chan CompressedArena) {
 	players := make(map[string]*Player)
 
 	rcvNet := make(chan RcvdData, 10)
@@ -172,50 +173,50 @@ func runPlayer(move chan *Player, create chan *Player, done chan *Player, update
 					// player not already moving
 					switch n.msg[0] {
 					// push directions
-					case 'u':
+					case 'n':
 						p.moveReq = North
 						//p.dx, p.dy = 0, -1
 						p.pull = false
 						p.moving = true // we no longer have access to the player data
 						move <- p       // send pointer to player to arena
-					case 'r':
+					case 'e':
 						p.moveReq = East
 						//p.dx, p.dy = 1, 0
 						p.pull = false
 						p.moving = true
 						move <- p
-					case 'd':
+					case 's':
 						p.moveReq = South
 						//p.dx, p.dy = 0, 1
 						p.pull = false
 						p.moving = true
 						move <- p
-					case 'l':
+					case 'w':
 						p.moveReq = West
 						//p.dx, p.dy = -1, 0
 						p.pull = false
 						p.moving = true
 						move <- p
 					// pull directions
-					case 'U':
+					case 'N':
 						p.moveReq = North
 						//p.dx, p.dy = 0, -1
 						p.pull = true
 						p.moving = true
 						move <- p
-					case 'R':
+					case 'E':
 						p.moveReq = East
 						//p.dx, p.dy = 1, 0
 						p.pull = true
 						p.moving = true
 						move <- p
-					case 'D':
+					case 'S':
 						p.moveReq = South
 						//p.dx, p.dy = 0, 1
 						p.pull = true
 						p.moving = true
 						move <- p
-					case 'L':
+					case 'W':
 						p.moveReq = West
 						//p.dx, p.dy = -1, 0
 						p.pull = true
@@ -229,14 +230,30 @@ func runPlayer(move chan *Player, create chan *Player, done chan *Player, update
 		case p := <-done: // arena is done with the player data, so we can access it again
 			//fmt.Println("done")
 			p.moving = false
+		case nr := <-bothered: // the number of the bothered player
+			// find which player this is
+			fmt.Println("someone was bothered", nr)
+			for addr, p := range players {
+				if p.nr == nr {
+					fmt.Println(addr, "was bothered")
+					players[addr].botherings++
+					break
+				}
+			}
 		case zarena := <-update:
 			fmt.Println("arena update")
 			for addr, p := range players {
 				addr := addr
-				pkt := make([]byte, zarena.buf.Len()+1)
-				copy(pkt[1:], zarena.buf.Bytes())
+				pkt := make([]byte, zarena.buf.Len()+2) // make room for player number and botherings
+				copy(pkt[2:], zarena.buf.Bytes())
+				// copy player number into packet
 				fmt.Println(p.nr, addr)
 				pkt[0] = byte(p.nr)
+				// copy botherings into packet
+				pkt[1] = byte(p.botherings)
+				fmt.Println("botherings", p.botherings)
+				players[addr].botherings = 0
+				// send the packet to the network goroutine
 				xmtNet <- XmtData{addr, pkt}
 			}
 		}
@@ -339,11 +356,12 @@ func runArena() {
 		go b2.ai(&arenaCopy, botherMoveChan)
 	}
 
+	botheredChan := make(chan uint8, 10) // TODO is this enough buffering??
 	playerMoveChan := make(chan *Player, 10)
 	playerCreateChan := make(chan *Player, 10)
 	playerDoneChan := make(chan *Player, 10)
 	updateClientsChan := make(chan CompressedArena) // unbuffered
-	go runPlayer(playerMoveChan, playerCreateChan, playerDoneChan, updateClientsChan)
+	go runPlayer(playerMoveChan, playerCreateChan, playerDoneChan, botheredChan, updateClientsChan)
 
 	// start update timer
 	updateTimerChan := make(chan bool) // unbuffered??
@@ -360,7 +378,7 @@ func runArena() {
 		select {
 		case b := <-botherMoveChan:
 			//fmt.Println(m.name + " moved")
-			b.move(&arena)
+			b.move(&arena, botheredChan)
 			var arenaCopy Arena // need to pass a copy of arena to goroutine
 			arenaCopy = arena
 			go b.ai(&arenaCopy, botherMoveChan)
@@ -432,13 +450,14 @@ func (arena *Arena) generateBlocks() {
 }
 
 func (arena *Arena) generateBothers(nr int) []Bother {
-	bothers := make([]Bother, nrBothers)
+	//bothers := make([]Bother, nrBothers) // TODO does this create default bothers, which get redefined later???
+	var bothers []Bother
 	for i := 0; i < nr; i++ {
 	Retry:
 		for {
 			x, y := rand.Intn(arenaWidth), rand.Intn(arenaHeight)
 			if arena[x][y] == SpaceType {
-				bothers[i] = Bother{pos: Coordinate{x, y}, gsr: 20, psr: 20, wPlayer: 50, wBother: 5, wArbGoal: 1}
+				bothers = append(bothers, MakeBother(Coordinate{x, y}))
 				arena[x][y] = BotherType
 				break Retry
 			}
