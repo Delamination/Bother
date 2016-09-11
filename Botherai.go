@@ -18,6 +18,8 @@ type Bother struct {
 	new         Coordinate
 	gsr         int // goal scan range
 	psr         int // path scan range
+	minDelay    int // the minimum delay between the bother's moves
+	maxDelay    int // the maximum delay between the bother's moves
 	arbGoal     Coordinate
 	wPlayer     float64 // player goal weighting
 	wBother     float64 // bother goal weighting
@@ -33,6 +35,8 @@ func MakeBother(pos Coordinate) Bother {
 	b.pos = pos
 	b.gsr = 20
 	b.psr = 20
+	b.minDelay = 500
+	b.maxDelay = 800
 	b.arbGoal = pos
 	b.wPlayer = 30.0
 	b.wBother = 10.0
@@ -104,7 +108,8 @@ func (b *Bother) printSensoryRange(arena *Arena) {
 
 // this runs in its own goroutine
 func (b *Bother) ai(arena *Arena, done chan *Bother) {
-	time.Sleep(time.Duration(rand.Intn(500)+300) * time.Millisecond)
+	//time.Sleep(time.Duration(rand.Intn(500)+300) * time.Millisecond)
+	time.Sleep(time.Duration(rand.Intn(b.minDelay)+(b.maxDelay-b.minDelay)) * time.Millisecond)
 	goals := b.findBestGoal(arena)
 	f := b.scanMoveField(arena)
 	dir := b.getBestMove(f, goals, arena)

@@ -1,0 +1,3 @@
+#! /bin/bash
+go run BotherServer.go Types.go Botherai.go
+
